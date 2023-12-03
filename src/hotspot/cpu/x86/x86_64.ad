@@ -13955,6 +13955,22 @@ peephole
   peepprocedure (test_may_remove);
 %}
 
+// fucking shit doesnt work
+//instruct bzhi_test(rRegI dst, rRegI src, rRegI mask, immI plus_1, immI minus_1, rFlagsReg cr)
+//%{
+//  predicate(false);
+//  match(Set dst (AndI (AddI (LShiftI plus_1 mask) minus_1) src));
+//  effect(KILL cr);
+//  flag(PD::Flag_sets_sign_flag, PD::Flag_sets_zero_flag, PD::Flag_clears_overflow_flag);
+//
+//  ins_cost(150);
+//  format %{ "bzhiq $dst, $src, $mask" %}
+//  ins_encode %{
+//    __ bzhiq($dst$$Register, $src$$Register, $mask$$Register);
+//  %}
+//  //ins_pipe(ialu_reg_reg);
+//  ins_pipe(pipe_slow);
+//%}
 
 //----------SMARTSPILL RULES---------------------------------------------------
 // These must follow all instruction definitions as they use the names
