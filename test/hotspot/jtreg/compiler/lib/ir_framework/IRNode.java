@@ -2233,6 +2233,21 @@ public class IRNode {
         machOnlyNameRegex(X86_TESTL_REG, "testL_reg");
     }
 
+    public static final String X86_DIV_REG_FAST = PREFIX + "X86_DIV_REG_FAST" + POSTFIX;
+    static {
+        machOnlyNameRegex(X86_DIV_REG_FAST, "div(I|L)_rReg_fast");
+    }
+
+    public static final String X86_DIVMOD_REG_FAST = PREFIX + "X86_DIVMOD_REG_FAST" + POSTFIX;
+    static {
+        machOnlyNameRegex(X86_DIVMOD_REG_FAST, "divMod(I|L)_rReg_divmod_fast");
+    }
+
+    public static final String X86_MOD_REG_FAST = PREFIX + "X86_MOD_REG_FAST" + POSTFIX;
+    static {
+        machOnlyNameRegex(X86_MOD_REG_FAST, "mod(I|L)_rReg_fast");
+    }
+
     /*
      * Utility methods to set up IR_NODE_MAPPINGS.
      */

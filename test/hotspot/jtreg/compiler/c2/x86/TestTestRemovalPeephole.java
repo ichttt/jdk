@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,7 +21,7 @@
  * questions.
  */
 
-package compiler.c2.irTests;
+package compiler.c2.x86;
 
 import jdk.test.lib.Asserts;
 import compiler.lib.ir_framework.*;
@@ -33,9 +33,8 @@ import jdk.test.lib.Utils;
  * @summary Test that unnessercary test instructions are not present in the final code
  * @bug 8312213
  * @library /test/lib /
- * @requires vm.compiler2.enabled
  * @requires os.arch == "x86_64" | os.arch == "amd64"
- * @run driver compiler.c2.irTests.TestTestRemovalPeephole
+ * @run driver compiler.c2.x86.TestTestRemovalPeephole
  */
 public class TestTestRemovalPeephole {
     static volatile boolean field;
