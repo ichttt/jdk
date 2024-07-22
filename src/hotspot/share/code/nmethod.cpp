@@ -844,10 +844,8 @@ void nmethod::run_nmethod_entry_barrier() {
     // By calling this nmethod entry barrier, it plays along and acts
     // like any other nmethod found on the stack of a thread (fewer surprises).
     nmethod* nm = this;
-    if (bs_nm->is_armed(nm)) {
-      bool alive = bs_nm->nmethod_entry_barrier(nm);
-      assert(alive, "should be alive");
-    }
+    bool alive = bs_nm->nmethod_entry_barrier(nm);
+    assert(alive, "should be alive");
   }
 }
 
@@ -1236,6 +1234,7 @@ void nmethod::init_defaults(CodeBuffer *code_buffer, CodeOffsets* offsets) {
   _has_method_handle_invokes  = 0;
   _has_wide_vectors           = 0;
   _has_monitors               = 0;
+  _has_scoped_access          = 0;
   _has_flushed_dependencies   = 0;
   _is_unlinked                = 0;
   _load_reported              = 0; // jvmti state
