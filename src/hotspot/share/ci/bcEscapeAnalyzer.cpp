@@ -54,13 +54,13 @@
 class BCEscapeAnalyzer::ArgumentMap {
   uint  _bits;
   enum {MAXBIT = 29,
-        ALLOCATED = 1,
-        UNKNOWN = 2};
+        ALLOCATED = 30,
+        UNKNOWN = 31};
 
   uint int_to_bit(uint e) const {
     if (e > MAXBIT)
       e = MAXBIT;
-    return (1 << (e + 2));
+    return (1 << (e));
   }
 
 public:
@@ -74,7 +74,7 @@ public:
   bool is_singleton(uint var) const     { return (_bits == int_to_bit(var)); }
   bool contains_unknown() const         { return (_bits & UNKNOWN) != 0; }
   bool contains_allocated() const       { return (_bits & ALLOCATED) != 0; }
-  bool contains_vars() const            { return (_bits & (((1 << MAXBIT) -1) << 2)) != 0; }
+  bool contains_vars() const            { return (_bits & ((1 << MAXBIT) - 1)) != 0; }
   void set(uint var)                    { _bits = int_to_bit(var); }
   void add(uint var)                    { _bits |= int_to_bit(var); }
   void add_unknown()                    { _bits = UNKNOWN; }
@@ -285,6 +285,11 @@ void BCEscapeAnalyzer::invoke(StateInfo &state, Bytecodes::Code code, ciMethod* 
   if (code == Bytecodes::_invokedynamic) {
     skip_callee = true;
   }
+  if (_level >= MaxBCEAEstimateLevel) {
+    TRACE_BCEA(1, tty->print_cr("[EA] Skipping method because level (%d) will exceed MaxBCEAEstimateLevel (%d)", _level, MaxBCEAEstimateLevel));
+    skip_callee = true;
+  }
+
   if (skip_callee) {
     TRACE_BCEA(3, tty->print_cr("[EA] skipping method %s::%s", holder->name()->as_utf8(), target->name()->as_utf8()));
     for (i = 0; i < arg_size; i++) {
@@ -1287,15 +1292,15 @@ void BCEscapeAnalyzer::clear_escape_info() {
 }
 
 
-void BCEscapeAnalyzer::compute_escape_info() {
+bool BCEscapeAnalyzer::compute_escape_info() {
   int i;
   assert(!methodData()->has_escape_info(), "do not overwrite escape info");
 
   vmIntrinsicID iid = known_intrinsic();
+  assert(_level <= MaxBCEAEstimateLevel, "should have filted this call before");
 
   // check if method can be analyzed
   if (iid == vmIntrinsics::_none && (method()->is_abstract() || method()->is_native() || !method()->holder()->is_initialized()
-      || _level > MaxBCEAEstimateLevel
       || method()->code_size() > MaxBCEAEstimateSize)) {
     if (BCEATraceLevel >= 1) {
       tty->print("Skipping method because: ");
@@ -1305,9 +1310,6 @@ void BCEscapeAnalyzer::compute_escape_info() {
         tty->print_cr("method is native.");
       else if (!method()->holder()->is_initialized())
         tty->print_cr("class of method is not initialized.");
-      else if (_level > MaxBCEAEstimateLevel)
-        tty->print_cr("level (%d) exceeds MaxBCEAEstimateLevel (%d).",
-                      _level, (int) MaxBCEAEstimateLevel);
       else if (method()->code_size() > MaxBCEAEstimateSize)
         tty->print_cr("code size (%d) exceeds MaxBCEAEstimateSize (%d).",
                       method()->code_size(), (int) MaxBCEAEstimateSize);
@@ -1316,7 +1318,7 @@ void BCEscapeAnalyzer::compute_escape_info() {
     }
     clear_escape_info();
 
-    return;
+    return true;
   }
 
   if (BCEATraceLevel >= 1) {
@@ -1338,13 +1340,26 @@ void BCEscapeAnalyzer::compute_escape_info() {
     methodData()->set_eflag(MethodData::allocated_escapes);
     methodData()->set_eflag(MethodData::unknown_modified);
     methodData()->set_eflag(MethodData::estimated);
-    return;
+    return true;
   }
 
   if (iid != vmIntrinsics::_none)
     compute_escape_for_intrinsic(iid);
   else {
     do_analysis();
+  }
+
+
+  if (MaxBCEAEstimateLevel > 2 && _level >= MaxBCEAEstimateLevel - 1 && _unknown_modified) {
+    // We are in a deep level and have _unknown_modified set, hinting us that we might have reached the depth limit
+    // Do not record the result. Maybe this analyzer will be triggered again with a lower depth limit,
+    // allowing us to search deeper
+    TRACE_BCEA(2, tty->print_cr("[EA] Not recording result for %s.%s due to level depth level %d being close to limit %d",
+                                method()->holder()->name()->as_utf8(),
+                                method()->name()->as_utf8(),
+                                _level,
+                                MaxBCEAEstimateLevel));
+    return false;
   }
 
   // don't store interprocedural escape information if it introduces
@@ -1377,7 +1392,9 @@ void BCEscapeAnalyzer::compute_escape_info() {
       methodData()->set_eflag(MethodData::unknown_modified);
     }
     methodData()->set_eflag(MethodData::estimated);
+    return true;
   }
+  return false;
 }
 
 void BCEscapeAnalyzer::read_escape_info() {
@@ -1472,8 +1489,10 @@ BCEscapeAnalyzer::BCEscapeAnalyzer(ciMethod* method, BCEscapeAnalyzer* parent)
                                   method->holder()->name()->as_utf8(),
                                   method->name()->as_utf8()));
 
-      compute_escape_info();
-      methodData()->update_escape_info();
+      bool update = compute_escape_info();
+      if (update) {
+        methodData()->update_escape_info();
+      }
     }
 #ifndef PRODUCT
     if (BCEATraceLevel >= 3) {

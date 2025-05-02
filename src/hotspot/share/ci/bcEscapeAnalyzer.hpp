@@ -95,7 +95,7 @@ class BCEscapeAnalyzer : public ArenaObj {
   // analysis
   void initialize();
   void clear_escape_info();
-  void compute_escape_info();
+  bool compute_escape_info();
   vmIntrinsicID known_intrinsic();
   void compute_escape_for_intrinsic(vmIntrinsicID iid);
   void do_analysis();
