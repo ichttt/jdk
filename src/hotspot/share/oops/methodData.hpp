@@ -2282,7 +2282,8 @@ public:
     return_local = 1 << 1,
     return_allocated = 1 << 2,
     allocated_escapes = 1 << 3,
-    unknown_modified = 1 << 4
+    unknown_modified = 1 << 4,
+    has_side_effects = 1 << 5
   };
 
   intx eflags()                                  { return _eflags; }

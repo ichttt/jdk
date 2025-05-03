@@ -58,8 +58,10 @@ class BCEscapeAnalyzer::ArgumentMap {
         UNKNOWN = 31};
 
   uint int_to_bit(uint e) const {
-    if (e > MAXBIT)
+    if (e > MAXBIT) {
+      TRACE_BCEA(1, tty->print_cr("[EA] Reached bit limit"));
       e = MAXBIT;
+    }
     return (1 << (e));
   }
 
@@ -286,7 +288,7 @@ void BCEscapeAnalyzer::invoke(StateInfo &state, Bytecodes::Code code, ciMethod* 
     skip_callee = true;
   }
   if (_level >= MaxBCEAEstimateLevel) {
-    TRACE_BCEA(1, tty->print_cr("[EA] Skipping method because level (%d) will exceed MaxBCEAEstimateLevel (%d)", _level, MaxBCEAEstimateLevel));
+    TRACE_BCEA(1, tty->print_cr("[EA] Skipping method because level (%d) will exceed MaxBCEAEstimateLevel (%ld)", _level, MaxBCEAEstimateLevel));
     skip_callee = true;
   }
 
@@ -296,6 +298,7 @@ void BCEscapeAnalyzer::invoke(StateInfo &state, Bytecodes::Code code, ciMethod* 
       set_method_escape(state.raw_pop());
     }
     _unknown_modified = true;  // assume the worst since we don't analyze the called method
+    _has_side_effects = true;
     return;
   }
 
@@ -338,7 +341,11 @@ void BCEscapeAnalyzer::invoke(StateInfo &state, Bytecodes::Code code, ciMethod* 
         set_global_escape(arg);
       }
     }
+    if (!_has_side_effects && analyzer._has_side_effects) {
+      must_record_dependencies = true;
+    }
     _unknown_modified = _unknown_modified || analyzer.has_non_arg_side_affects();
+    _has_side_effects = _has_side_effects || analyzer.has_side_effects();
 
     // record dependencies if at least one parameter retained stack-allocatable
     if (must_record_dependencies) {
@@ -364,6 +371,7 @@ void BCEscapeAnalyzer::invoke(StateInfo &state, Bytecodes::Code code, ciMethod* 
       set_global_escape(arg);
     }
     _unknown_modified = true;  // assume the worst since we don't know the called method
+    _has_side_effects = true;
   }
 }
 
@@ -475,17 +483,20 @@ void BCEscapeAnalyzer::iterate_one_block(ciBlock *blk, StateInfo &state, Growabl
       case Bytecodes::_baload:
       case Bytecodes::_caload:
       case Bytecodes::_saload:
+        _has_side_effects = true; // could NPE
         state.spop();
         set_method_escape(state.apop());
         state.spush();
         break;
       case Bytecodes::_laload:
       case Bytecodes::_daload:
+        _has_side_effects = true; // could NPE
         state.spop();
         set_method_escape(state.apop());
         state.lpush();
         break;
       case Bytecodes::_aaload:
+        _has_side_effects = true; // could NPE
         { state.spop();
           ArgumentMap array = state.apop();
           set_method_escape(array);
@@ -537,6 +548,7 @@ void BCEscapeAnalyzer::iterate_one_block(ciBlock *blk, StateInfo &state, Growabl
       case Bytecodes::_castore:
       case Bytecodes::_sastore:
       {
+        _has_side_effects = true;
         state.spop();
         state.spop();
         ArgumentMap arr = state.apop();
@@ -547,6 +559,7 @@ void BCEscapeAnalyzer::iterate_one_block(ciBlock *blk, StateInfo &state, Growabl
       case Bytecodes::_lastore:
       case Bytecodes::_dastore:
       {
+        _has_side_effects = true;
         state.lpop();
         state.spop();
         ArgumentMap arr = state.apop();
@@ -556,6 +569,7 @@ void BCEscapeAnalyzer::iterate_one_block(ciBlock *blk, StateInfo &state, Growabl
       }
       case Bytecodes::_aastore:
       {
+        _has_side_effects = true;
         set_global_escape(state.apop());
         state.spop();
         ArgumentMap arr = state.apop();
@@ -633,15 +647,17 @@ void BCEscapeAnalyzer::iterate_one_block(ciBlock *blk, StateInfo &state, Growabl
           state.raw_push(w2);
         }
         break;
+      case Bytecodes::_idiv:
+      case Bytecodes::_irem:
+        _has_side_effects = true; // Could throw ArithemeticException
+        // fallthrough
       case Bytecodes::_iadd:
       case Bytecodes::_fadd:
       case Bytecodes::_isub:
       case Bytecodes::_fsub:
       case Bytecodes::_imul:
       case Bytecodes::_fmul:
-      case Bytecodes::_idiv:
       case Bytecodes::_fdiv:
-      case Bytecodes::_irem:
       case Bytecodes::_frem:
       case Bytecodes::_iand:
       case Bytecodes::_ior:
@@ -650,15 +666,17 @@ void BCEscapeAnalyzer::iterate_one_block(ciBlock *blk, StateInfo &state, Growabl
         state.spop();
         state.spush();
         break;
+      case Bytecodes::_ldiv:
+        _has_side_effects = true; // Could throw ArithemeticException
+        // fallthrough
+      case Bytecodes::_lrem:
       case Bytecodes::_ladd:
       case Bytecodes::_dadd:
       case Bytecodes::_lsub:
       case Bytecodes::_dsub:
       case Bytecodes::_lmul:
       case Bytecodes::_dmul:
-      case Bytecodes::_ldiv:
       case Bytecodes::_ddiv:
-      case Bytecodes::_lrem:
       case Bytecodes::_drem:
       case Bytecodes::_land:
       case Bytecodes::_lor:
@@ -855,6 +873,7 @@ void BCEscapeAnalyzer::iterate_one_block(ciBlock *blk, StateInfo &state, Growabl
         break;
       case Bytecodes::_getstatic:
       case Bytecodes::_getfield:
+        _has_side_effects = true; // could cause exceptions
         { bool ignored_will_link;
           ciField* field = s.get_field(ignored_will_link);
           BasicType field_type = field->type()->basic_type();
@@ -872,6 +891,7 @@ void BCEscapeAnalyzer::iterate_one_block(ciBlock *blk, StateInfo &state, Growabl
         break;
       case Bytecodes::_putstatic:
       case Bytecodes::_putfield:
+        _has_side_effects = true; // could cause exceptions
         { bool will_link;
           ciField* field = s.get_field(will_link);
           BasicType field_type = field->type()->basic_type();
@@ -891,9 +911,10 @@ void BCEscapeAnalyzer::iterate_one_block(ciBlock *blk, StateInfo &state, Growabl
         break;
       case Bytecodes::_invokevirtual:
       case Bytecodes::_invokespecial:
-      case Bytecodes::_invokestatic:
       case Bytecodes::_invokedynamic:
       case Bytecodes::_invokeinterface:
+        _has_side_effects = true; // could cause NPE
+      case Bytecodes::_invokestatic:
         { bool ignored_will_link;
           ciSignature* declared_signature = nullptr;
           ciMethod* target = s.get_method(ignored_will_link, &declared_signature);
@@ -957,14 +978,17 @@ void BCEscapeAnalyzer::iterate_one_block(ciBlock *blk, StateInfo &state, Growabl
         }
         break;
       case Bytecodes::_arraylength:
+        _has_side_effects = true; // could throw NPE
         set_method_escape(state.apop());
         state.spush();
         break;
       case Bytecodes::_athrow:
         set_global_escape(state.apop());
         fall_through = false;
+        _has_side_effects = true;
         break;
       case Bytecodes::_checkcast:
+        _has_side_effects = true; // could throw ClassCastException
         { ArgumentMap obj = state.apop();
           set_method_escape(obj);
           state.apush(obj);
@@ -1011,6 +1035,7 @@ void BCEscapeAnalyzer::iterate_one_block(ciBlock *blk, StateInfo &state, Growabl
         break;
       }
       case Bytecodes::_breakpoint:
+        _has_side_effects = true;
         break;
       default:
         ShouldNotReachHere();
@@ -1266,6 +1291,7 @@ void BCEscapeAnalyzer::initialize() {
   }
   _allocated_escapes = false;
   _unknown_modified = false;
+  _has_side_effects = false;
 }
 
 void BCEscapeAnalyzer::clear_escape_info() {
@@ -1289,6 +1315,7 @@ void BCEscapeAnalyzer::clear_escape_info() {
   _return_allocated = false;
   _allocated_escapes = true;
   _unknown_modified = true;
+  _has_side_effects = true;
 }
 
 
@@ -1350,11 +1377,11 @@ bool BCEscapeAnalyzer::compute_escape_info() {
   }
 
 
-  if (MaxBCEAEstimateLevel > 2 && _level >= MaxBCEAEstimateLevel - 1 && _unknown_modified) {
+  if (MaxBCEAEstimateLevel > 2 && _level >= MaxBCEAEstimateLevel - 1 && _unknown_modified && _has_side_effects) {
     // We are in a deep level and have _unknown_modified set, hinting us that we might have reached the depth limit
     // Do not record the result. Maybe this analyzer will be triggered again with a lower depth limit,
     // allowing us to search deeper
-    TRACE_BCEA(2, tty->print_cr("[EA] Not recording result for %s.%s due to level depth level %d being close to limit %d",
+    TRACE_BCEA(2, tty->print_cr("[EA] Not recording result for %s.%s due to level depth level %d being close to limit %ld",
                                 method()->holder()->name()->as_utf8(),
                                 method()->name()->as_utf8(),
                                 _level,
@@ -1391,6 +1418,9 @@ bool BCEscapeAnalyzer::compute_escape_info() {
     if (_unknown_modified) {
       methodData()->set_eflag(MethodData::unknown_modified);
     }
+    if (_has_side_effects) {
+      methodData()->set_eflag(MethodData::has_side_effects);
+    }
     methodData()->set_eflag(MethodData::estimated);
     return true;
   }
@@ -1414,6 +1444,7 @@ void BCEscapeAnalyzer::read_escape_info() {
   _return_allocated = methodData()->eflag_set(MethodData::return_allocated);
   _allocated_escapes = methodData()->eflag_set(MethodData::allocated_escapes);
   _unknown_modified = methodData()->eflag_set(MethodData::unknown_modified);
+  _has_side_effects = methodData()->eflag_set(MethodData::has_side_effects);
 
 }
 
@@ -1449,6 +1480,8 @@ void BCEscapeAnalyzer::dump() {
     tty->print(" allocated_escapes");
   if (_unknown_modified)
     tty->print(" unknown_modified");
+  if (_has_side_effects)
+    tty->print(" has_side_effects");
   tty->cr();
 }
 #endif
@@ -1466,6 +1499,7 @@ BCEscapeAnalyzer::BCEscapeAnalyzer(ciMethod* method, BCEscapeAnalyzer* parent)
     , _return_allocated(false)
     , _allocated_escapes(false)
     , _unknown_modified(false)
+    , _has_side_effects(false)
     , _dependencies(_arena, 4, 0, nullptr)
     , _parent(parent)
     , _level(parent == nullptr ? 0 : parent->level() + 1) {

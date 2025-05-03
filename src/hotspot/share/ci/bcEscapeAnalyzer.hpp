@@ -61,6 +61,7 @@ class BCEscapeAnalyzer : public ArenaObj {
   bool              _return_allocated;
   bool              _allocated_escapes;
   bool              _unknown_modified;
+  bool              _has_side_effects;
 
   GrowableArray<ciMetadata*> _dependencies;
 
@@ -148,6 +149,7 @@ class BCEscapeAnalyzer : public ArenaObj {
   bool is_arg_modified(int arg, int offset, int size_in_bytes);
   void set_arg_modified(int arg, int offset, int size_in_bytes);
   bool has_non_arg_side_affects()    { return _unknown_modified; }
+  bool has_side_effects()           { return _has_side_effects; }
 
   // Copy dependencies from this analysis into "deps"
   void copy_dependencies(Dependencies *deps);
