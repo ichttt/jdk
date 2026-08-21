@@ -170,71 +170,125 @@ static juint map_condition_to_required_test_flags(Assembler::Condition condition
 }
 
 
+// Checks whether the given node may modify the flags register, via an explicit define or by being killed.
+// This method might conservatively return true.
+static bool may_modify_flags(Node* node, OptoReg::Name flags_reg) {
+  if (node->is_MachProj()) {
+    // MachProjs have to be handled separately, as they are derived from ProjNode and not from MachNode
+    return node->as_MachProj()->_rout.member(flags_reg);
+  }
+  if (!node->is_Mach()) {
+    // Nodes without a machine representation such as Phi Nodes do not emit any code
+    return false;
+  }
+  if (node->is_MachSpillCopy() || node->is_MachTemp() || node->is_MachMerge()) {
+    // These either do not emit any code at all or only emit moves, which leave the flags alone.
+    // They have no rule() we could use below, so they need to be handled here.
+    return false;
+  }
+  MachNode* mach = node->as_Mach();
+  if (mach->rule() >= static_cast<uint>(_last_Mach_Node)) {
+    // Not created by matching a rule of the AD file, e.g. the method prolog. Assume the worst
+    return true;
+  }
+  // A normal rule defined in AD file. Just check the output register mask.
+  return mach->out_RegMask().member(flags_reg);
+}
+
 // This function removes the TEST instruction when it detected shapes likes AND r1, r2; TEST r1, r1
 // It checks the required EFLAGS for the downstream instructions of the TEST
-// and removes the TEST if the preceding instructions already sets all these flags
+// and removes the TEST if the instruction computing the tested value already sets all these flags.
+// That instruction does not need to be placed directly in front of the TEST, it is sufficient
+// that none of the instructions in between modifies the flags register.
 bool Peephole::test_may_remove(Block* block, int block_index, PhaseCFG* cfg_, PhaseRegAlloc* ra_,
                             MachNode* (*new_root)(), uint inst0_rule) {
   MachNode* test_to_check = block->get_node(block_index)->as_Mach();
   assert(test_to_check->rule() == inst0_rule, "sanity");
 
-  Node* inst1 = test_to_check->in(1);
-  // Only remove test if the block order is inst1 -> MachProjNode (because the node to match must specify KILL cr) -> test_to_check
-  // So inst1 must be at index - 2
-  if (block_index < 2 || block->get_node(block_index - 2) != inst1) {
+  // inst1 is the instruction that computes the value the test operates on
+  MachNode* test_input = test_to_check->in(1)->as_Mach() != nullptr ? test_to_check->in(1)->isa_Mach() : nullptr;
+  if (test_input == nullptr) {
     return false;
   }
-  if (inst1 != nullptr) {
-    MachNode* prevNode = inst1->isa_Mach();
-    if (prevNode != nullptr) {
-      // Includes other flags as well, but that doesn't matter here
-      juint all_node_flags = prevNode->flags();
-      if (all_node_flags == 0) {
-        // We can return early - there is no way the test can be removed, the preceding node does not set any flags
-        return false;
-      }
-      juint required_flags = 0;
-      // Search for the uses of the node and compute which flags are required
-      for (DUIterator_Fast imax, i = test_to_check->fast_outs(imax); i < imax; i++) {
-        MachNode* node_out = test_to_check->fast_out(i)->isa_Mach();
-        bool found_correct_oper = false;
-        for (uint16_t j = 0; j < node_out->_num_opnds; ++j) {
-          MachOper* operand = node_out->_opnds[j];
-          if (operand->opcode() == cmpOp_rule || operand->opcode() == cmpOpU_rule) {
-            auto condition = static_cast<Assembler::Condition>(operand->ccode());
-            juint flags_for_inst = map_condition_to_required_test_flags(condition);
-            required_flags = required_flags | flags_for_inst;
-            found_correct_oper = true;
-            break;
-          }
-        }
-        if (!found_correct_oper) {
-          // We could not find one the required flags for one of the dependencies. Keep the test as it might set flags needed for that node
-          return false;
-        }
-      }
-      assert(required_flags != 0, "No flags required, should be impossible!");
-      bool sets_all_required_flags = (required_flags & ~all_node_flags) == 0;
-      if (sets_all_required_flags) {
-        // All flags are covered are clear to remove this test
-        MachProjNode* machProjNode = block->get_node(block_index - 1)->isa_MachProj();
-        assert(machProjNode != nullptr, "Expected a MachProj node here!");
-        assert(ra_->get_reg_first(machProjNode) == ra_->get_reg_first(test_to_check), "Test must operate on the same register as its replacement");
+  // Includes other flags as well, but that doesn't matter here
+  juint all_node_flags = test_input->flags();
+  if (all_node_flags == 0) {
+    // We can return early - there is no way the test can be removed, the node computing the
+    // tested value does not set any flags
+    return false;
+  }
 
-        // Remove the original test node and replace it with the pseudo test node. The AND node already sets ZF
-        test_to_check->replace_by(machProjNode);
+  OptoReg::Name flags_reg = ra_->get_reg_first(test_to_check);
 
-        // Modify the block
-        test_to_check->set_removed();
-        block->remove_node(block_index);
+  // Walk the block backwards, starting right in front of the test, until we find inst1. The test
+  // is only redundant if none of the instructions in between modifies the flags that inst1 has set.
+  MachProjNode* flags_proj = nullptr;
+  for (int i = block_index - 1; ; i--) {
+    if (i < 0) {
+      // test_input is not part of this basic block
+      return false;
+    }
 
-        // Modify the control flow
-        cfg_->map_node_to_block(test_to_check, nullptr);
-        return true;
+    Node* current = block->get_node(i);
+    if (current == test_input) {
+      break;
+    }
+    if (!may_modify_flags(current, flags_reg)) {
+      continue;
+    }
+    if (current->is_MachProj() && current->in(0) == test_input) {
+      // These are the flags set by inst1, keep on searching for inst1 itself
+      flags_proj = current->as_MachProj();
+      continue;
+    }
+    // Some other instruction overwrites the flags in between, so the test is not redundant
+    return false;
+  }
+
+  if (flags_proj == nullptr) {
+    // test_input does not kill the flags register, so it does not set any flags we might reuse
+    return false;
+  }
+
+  juint required_flags = 0;
+  // Search for the uses of the node and compute which flags are required
+  for (DUIterator_Fast imax, i = test_to_check->fast_outs(imax); i < imax; i++) {
+    MachNode* node_out = test_to_check->fast_out(i)->isa_Mach();
+    bool found_correct_oper = false;
+    for (uint16_t j = 0; node_out != nullptr && j < node_out->_num_opnds; ++j) {
+      MachOper* operand = node_out->_opnds[j];
+      if (operand->opcode() == cmpOp_rule || operand->opcode() == cmpOpU_rule) {
+        auto condition = static_cast<Assembler::Condition>(operand->ccode());
+        juint flags_for_inst = map_condition_to_required_test_flags(condition);
+        required_flags = required_flags | flags_for_inst;
+        found_correct_oper = true;
+        break;
       }
     }
+    if (!found_correct_oper) {
+      // We could not find one the required flags for one of the dependencies. Keep the test as it might set flags needed for that node
+      return false;
+    }
   }
-  return false;
+  assert(required_flags != 0, "No flags required, should be impossible!");
+  bool sets_all_required_flags = (required_flags & ~all_node_flags) == 0;
+  if (!sets_all_required_flags) {
+    return false;
+  }
+
+  // All flags are covered, we are clear to remove this test
+  assert(ra_->get_reg_first(flags_proj) == flags_reg, "Test must operate on the same register as its replacement");
+
+  // Remove the original test node and replace it with the flags projection node of test_input
+  test_to_check->replace_by(flags_proj);
+
+  // Modify the block
+  test_to_check->set_removed();
+  block->remove_node(block_index);
+
+  // Modify the control flow
+  cfg_->map_node_to_block(test_to_check, nullptr);
+  return true;
 }
 
 // This function removes redundant lea instructions that result from chained dereferences that

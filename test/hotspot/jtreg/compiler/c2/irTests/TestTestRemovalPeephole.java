@@ -39,6 +39,8 @@ import jdk.test.lib.Utils;
  */
 public class TestTestRemovalPeephole {
     static volatile boolean field;
+    static int sinkInt;
+    static long sinkLong;
     public static void main(String[] args) {
         TestFramework.run();
     }
@@ -163,6 +165,93 @@ public class TestTestRemovalPeephole {
         return false;
     }
 
+    // The following tests check that the test is also removed if the instruction that sets the
+    // flags is not placed directly in front of it. The store in between only emits a mov, which
+    // leaves the flags alone. It uses the result of the addition/or, so it is guaranteed to be
+    // scheduled after it and before the test, which is always scheduled next to the branch.
+
+    @Test
+    @Arguments(values = {Argument.RANDOM_EACH, Argument.RANDOM_EACH})
+    @IR(failOn = {IRNode.X86_TESTI_REG, IRNode.X86_TESTL_REG}, phase = CompilePhase.FINAL_CODE)
+    public boolean testIntAddtionEquals0StoreInBetween(int x, int y) {
+        int result = x + y;
+        sinkInt = result;
+        if (result == 0) {
+            field = true;
+            return true;
+        }
+        return false;
+    }
+
+    @Test
+    @Arguments(values = {Argument.RANDOM_EACH, Argument.RANDOM_EACH})
+    @IR(failOn = {IRNode.X86_TESTI_REG, IRNode.X86_TESTL_REG}, phase = CompilePhase.FINAL_CODE)
+    public boolean testLongAddtionEquals0StoreInBetween(long x, long y) {
+        long result = x + y;
+        sinkLong = result;
+        if (result == 0) {
+            field = true;
+            return true;
+        }
+        return false;
+    }
+
+    @Test
+    @Arguments(values = {Argument.RANDOM_EACH, Argument.RANDOM_EACH})
+    @IR(failOn = {IRNode.X86_TESTI_REG, IRNode.X86_TESTL_REG}, phase = CompilePhase.FINAL_CODE)
+    public boolean testIntOrGreater0StoreInBetween(int x, int y) {
+        int result = x | y;
+        sinkInt = result;
+        if (result > 0) {
+            field = true;
+            return true;
+        }
+        return false;
+    }
+
+    @Test
+    @Arguments(values = {Argument.RANDOM_EACH, Argument.RANDOM_EACH})
+    @IR(failOn = {IRNode.X86_TESTI_REG, IRNode.X86_TESTL_REG}, phase = CompilePhase.FINAL_CODE)
+    public boolean testLongOrNotEquals0StoreInBetween(long x, long y) {
+        long result = x | y;
+        sinkLong = result;
+        if (result != 0) {
+            field = true;
+            return true;
+        }
+        return false;
+    }
+
+    // The following tests check that the test is kept if an instruction in between overwrites the
+    // flags. The multiplication depends on the result of the addition, so it is scheduled between
+    // the addition and the test, and imul modifies the overflow and the carry flag.
+
+    @Test
+    @Arguments(values = {Argument.RANDOM_EACH, Argument.RANDOM_EACH, Argument.RANDOM_EACH})
+    @IR(counts = {IRNode.X86_TESTI_REG, "1"}, phase = CompilePhase.FINAL_CODE)
+    public boolean testIntAddtionEquals0FlagsOverwritten(int x, int y, int z) {
+        int result = x + y;
+        sinkInt = result * z;
+        if (result == 0) {
+            field = true;
+            return true;
+        }
+        return false;
+    }
+
+    @Test
+    @Arguments(values = {Argument.RANDOM_EACH, Argument.RANDOM_EACH, Argument.RANDOM_EACH})
+    @IR(counts = {IRNode.X86_TESTL_REG, "1"}, phase = CompilePhase.FINAL_CODE)
+    public boolean testLongAddtionEquals0FlagsOverwritten(long x, long y, long z) {
+        long result = x + y;
+        sinkLong = result * z;
+        if (result == 0) {
+            field = true;
+            return true;
+        }
+        return false;
+    }
+
     @DontCompile
     public void assertResult(int x, int y) {
         Asserts.assertEQ((x + y) == 0, testIntAddtionEquals0(x, y));
@@ -170,6 +259,9 @@ public class TestTestRemovalPeephole {
         Asserts.assertEQ((x | y) == 0, testIntOrEquals0(x, y));
         Asserts.assertEQ((x | y) != 0, testIntOrNotEquals0(x, y));
         Asserts.assertEQ((x | y) > 0, testIntOrGreater0(x, y));
+        Asserts.assertEQ((x + y) == 0, testIntAddtionEquals0StoreInBetween(x, y));
+        Asserts.assertEQ((x | y) > 0, testIntOrGreater0StoreInBetween(x, y));
+        Asserts.assertEQ((x + y) == 0, testIntAddtionEquals0FlagsOverwritten(x, y, x));
     }
 
     @DontCompile
@@ -179,5 +271,8 @@ public class TestTestRemovalPeephole {
         Asserts.assertEQ((x | y) == 0, testLongOrEquals0(x, y));
         Asserts.assertEQ((x | y) != 0, testLongOrNotEquals0(x, y));
         Asserts.assertEQ((x | y) > 0, testLongOrGreater0(x, y));
+        Asserts.assertEQ((x + y) == 0, testLongAddtionEquals0StoreInBetween(x, y));
+        Asserts.assertEQ((x | y) != 0, testLongOrNotEquals0StoreInBetween(x, y));
+        Asserts.assertEQ((x + y) == 0, testLongAddtionEquals0FlagsOverwritten(x, y, x));
     }
 }
