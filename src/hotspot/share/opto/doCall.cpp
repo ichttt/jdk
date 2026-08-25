@@ -91,6 +91,35 @@ static void trace_type_profile(Compile* C, ciMethod* method, JVMState* jvms,
   }
 }
 
+// Maximum number of receiver types that we are willing to guard with an explicit
+// type check at this call site.
+//
+// Guarded inlining emits a chain of type checks and a separate copy of the
+// callee for every receiver it speculates on, so going beyond the two receivers
+// of bimorphic inlining costs a noticeable amount of code size and compile time.
+// Only spend that at call sites which are executed often relative to their
+// caller, in particular do not spend it in uncommon branches.
+static int max_guarded_receivers(ciMethod* caller, ciCallProfile& profile) {
+  if (!UseBimorphicInlining) {
+    return 1;
+  }
+  if (!UsePolymorphicInlining || profile.morphism() <= 2) {
+    return 2;
+  }
+  int invocation_count = caller->interpreter_invocation_count();
+  if (invocation_count <= 0) {
+    // Without an invocation count we cannot tell how hot the call site is.
+    return 2;
+  }
+  double freq = (double)caller->scale_count(profile.count()) / (double)invocation_count;
+  if (freq < InlineFrequencyRatio) {
+    // More polymorphic inlining means more code size and compilation time,
+    // so we should only do more than biomorphic inlining if the code path is taken frequently.
+    return 2;
+  }
+  return (int)PolymorphicInliningLimit;
+}
+
 CallGenerator* Compile::call_generator(ciMethod* callee, int vtable_index, bool call_does_dispatch,
                                        JVMState* jvms, bool allow_inline,
                                        float prof_factor, ciKlass* speculative_receiver_type,
@@ -129,17 +158,24 @@ CallGenerator* Compile::call_generator(ciMethod* callee, int vtable_index, bool 
 
   CompileLog* log = this->log();
   if (log != nullptr) {
-    int rid = (receiver_count >= 0)? log->identify(profile.receiver(0)): -1;
-    int r2id = (rid != -1 && profile.has_receiver(1))? log->identify(profile.receiver(1)):-1;
+    int rids[ciCallProfile::MorphismLimit];
+    int num_rids = 0;
+    if (receiver_count >= 0) {
+      for (int i = 0; i < ciCallProfile::MorphismLimit && profile.has_receiver(i); i++) {
+        rids[num_rids++] = log->identify(profile.receiver(i));
+      }
+    }
     log->begin_elem("call method='%d' count='%d' prof_factor='%f'",
                     log->identify(callee), site_count, prof_factor);
     if (call_does_dispatch)  log->print(" virtual='1'");
     if (allow_inline)     log->print(" inline='1'");
-    if (receiver_count >= 0) {
-      log->print(" receiver='%d' receiver_count='%d'", rid, receiver_count);
-      if (profile.has_receiver(1)) {
-        log->print(" receiver2='%d' receiver2_count='%d'", r2id, profile.receiver_count(1));
-      }
+    // The most frequent receiver is logged as 'receiver', the remaining ones are
+    // numbered starting at 'receiver2'.
+    if (num_rids > 0) {
+      log->print(" receiver='%d' receiver_count='%d'", rids[0], profile.receiver_count(0));
+    }
+    for (int i = 1; i < num_rids; i++) {
+      log->print(" receiver%d='%d' receiver%d_count='%d'", i + 1, rids[i], i + 1, profile.receiver_count(i));
     }
     if (callee->is_method_handle_intrinsic()) {
       log->print(" method_handle_intrinsic='1'");
@@ -242,8 +278,8 @@ CallGenerator* Compile::call_generator(ciMethod* callee, int vtable_index, bool 
         if (!too_many_traps_or_recompiles(caller, bci, Deoptimization::Reason_speculate_class_check)) {
           // We have a speculative type, we should be able to resolve
           // the call. We do that before looking at the profiling at
-          // this invoke because it may lead to bimorphic inlining which
-          // a speculative type should help us avoid.
+          // this invoke because it may lead to bimorphic or polymorphic
+          // inlining which a speculative type should help us avoid.
           receiver_method = callee->resolve_invoke(jvms->method()->holder(),
                                                    speculative_receiver_type,
                                                    check_access);
@@ -258,9 +294,14 @@ CallGenerator* Compile::call_generator(ciMethod* callee, int vtable_index, bool 
           speculative_receiver_type = nullptr;
         }
       }
+      // Only speculate on the minor receivers of a call site if the profile
+      // recorded all of them. Guarding a subset of an unknown set of receivers
+      // would leave a virtual call behind the type checks and we would pay for
+      // both. Guarding a single dominant receiver is still worth it though.
+      const bool guard_minor_receivers = (morphism > 1 && morphism <= max_guarded_receivers(caller, profile));
+
       if (receiver_method == nullptr &&
-          (have_major_receiver || morphism == 1 ||
-           (morphism == 2 && UseBimorphicInlining))) {
+          (have_major_receiver || morphism == 1 || guard_minor_receivers)) {
         // receiver_method = profile.method();
         // Profiles do not suggest methods now.  Look it up in the major receiver.
         assert(check_access, "required");
@@ -272,48 +313,69 @@ CallGenerator* Compile::call_generator(ciMethod* callee, int vtable_index, bool 
         CallGenerator* hit_cg = this->call_generator(receiver_method,
               vtable_index, !call_does_dispatch, jvms, allow_inline, prof_factor);
         if (hit_cg != nullptr) {
-          // Look up second receiver.
-          CallGenerator* next_hit_cg = nullptr;
-          ciMethod* next_receiver_method = nullptr;
-          if (morphism == 2 && UseBimorphicInlining) {
+          // Look up the minor receivers. Each of them gets its own type check,
+          // so stop at the first one we cannot handle: the receivers we generate
+          // code for have to be a prefix of the profile for the fall-through of
+          // the type check chain to be provably unreachable.
+          ciMethod*      next_receiver_method[ciCallProfile::MorphismLimit];
+          CallGenerator* next_hit_cg[ciCallProfile::MorphismLimit];
+          int num_next_hits = 0;
+          if (guard_minor_receivers) {
             assert(check_access, "required");
-            next_receiver_method = callee->resolve_invoke(jvms->method()->holder(),
-                                                          profile.receiver(1));
-            if (next_receiver_method != nullptr) {
-              next_hit_cg = this->call_generator(next_receiver_method,
+            for (int i = 1; i < morphism; i++) {
+              ciMethod* next_method = callee->resolve_invoke(jvms->method()->holder(),
+                                                             profile.receiver(i));
+              if (next_method == nullptr) {
+                break;
+              }
+              CallGenerator* next_cg = this->call_generator(next_method,
                                   vtable_index, !call_does_dispatch, jvms,
                                   allow_inline, prof_factor);
-              if (next_hit_cg != nullptr && !next_hit_cg->is_inline() &&
-                  have_major_receiver && UseOnlyInlinedBimorphic) {
-                  // Skip if we can't inline second receiver's method
-                  next_hit_cg = nullptr;
+              if (next_cg == nullptr) {
+                break;
               }
+              if (!next_cg->is_inline() && have_major_receiver && UseOnlyInlinedBimorphic) {
+                // Skip if we can't inline a minor receiver's method
+                break;
+              }
+              next_receiver_method[num_next_hits] = next_method;
+              next_hit_cg[num_next_hits] = next_cg;
+              num_next_hits++;
             }
           }
+          // Did we end up with a type check for every receiver the profile knows
+          // about? Only then is the fall-through path known to be unreachable.
+          bool all_receivers_guarded = (morphism > 0) && (num_next_hits == morphism - 1);
           CallGenerator* miss_cg;
-          Deoptimization::DeoptReason reason = (morphism == 2
+          Deoptimization::DeoptReason reason = (morphism > 1
                                                ? Deoptimization::Reason_bimorphic
                                                : Deoptimization::reason_class_check(speculative_receiver_type != nullptr));
-          if ((morphism == 1 || (morphism == 2 && next_hit_cg != nullptr)) &&
+          if (all_receivers_guarded &&
               !too_many_traps_or_recompiles(caller, bci, reason)
              ) {
             // Generate uncommon trap for class check failure path
-            // in case of monomorphic or bimorphic virtual call site.
+            // in case of monomorphic, bimorphic or polymorphic virtual call site.
             miss_cg = CallGenerator::for_uncommon_trap(callee, reason,
                         Deoptimization::Action_maybe_recompile);
           } else {
             // Generate virtual call for class check failure path
-            // in case of polymorphic virtual call site.
+            // in case of megamorphic virtual call site.
             miss_cg = (IncrementalInlineVirtual ? CallGenerator::for_late_inline_virtual(callee, vtable_index, prof_factor)
                                                 : CallGenerator::for_virtual_call(callee, vtable_index));
           }
           if (miss_cg != nullptr) {
-            if (next_hit_cg != nullptr) {
+            // Build up the chain of type checks, starting at the least likely
+            // receiver, so that the most likely one ends up being checked first.
+            for (int i = num_next_hits; i > 0 && miss_cg != nullptr; i--) {
               assert(speculative_receiver_type == nullptr, "shouldn't end up here if we used speculation");
-              trace_type_profile(C, jvms->method(), jvms, next_receiver_method, profile.receiver(1), site_count, profile.receiver_count(1));
+              trace_type_profile(C, jvms->method(), jvms, next_receiver_method[i-1], profile.receiver(i),
+                                 site_count, profile.receiver_count(i));
               // We don't need to record dependency on a receiver here and below.
               // Whenever we inline, the dependency is added by Parse::Parse().
-              miss_cg = CallGenerator::for_predicted_call(profile.receiver(1), miss_cg, next_hit_cg, PROB_MAX);
+              // The probability is conditional on all more likely receivers
+              // having been checked and missed already.
+              miss_cg = CallGenerator::for_predicted_call(profile.receiver(i), miss_cg, next_hit_cg[i-1],
+                                                          profile.conditional_receiver_prob(i));
             }
             if (miss_cg != nullptr) {
               ciKlass* k = speculative_receiver_type != nullptr ? speculative_receiver_type : profile.receiver(0);

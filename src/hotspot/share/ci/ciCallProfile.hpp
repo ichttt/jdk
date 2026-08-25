@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,12 +33,18 @@
 // This class is used to determine the frequently called method
 // at some call site
 class ciCallProfile : StackObj {
+public:
+  // Max call site's morphism we care about. Receivers are read from the MDO
+  // which records at most TypeProfileWidth of them, so there is no point in
+  // determining a morphism beyond the maximum value TypeProfileWidth can be
+  // set to.
+  enum { MorphismLimit = 8 };
+
 private:
   // Fields are initialized directly by ciMethod::call_profile_at_bci.
   friend class ciMethod;
   friend class ciMethodHandle;
 
-  enum { MorphismLimit = 2 }; // Max call site's morphism we care about
   int  _limit;                // number of receivers have been determined
   int  _morphism;             // determined call site's morphism
   int  _count;                // # times has this call been executed
@@ -72,6 +78,22 @@ public:
   ciKlass*  receiver(int i)        {
     assert(i < _limit, "out of Call Profile MorphismLimit");
     return _receiver[i];
+  }
+
+  // Probability of seeing receiver i under the condition that none of the more
+  // frequent receivers 0..i-1 was seen. Used to weight the branches of the type
+  // check chain that guarded inlining emits for a bi-/polymorphic call site.
+  float conditional_receiver_prob(int i) {
+    assert(i < _limit, "out of Call Profile MorphismLimit");
+    int remaining = _count;
+    for (int j = 0; j < i; j++) {
+      remaining -= _receiver_count[j];
+    }
+    if (remaining <= _receiver_count[i]) {
+      // Either receiver i is the only one left or the counters saturated.
+      return 1.0f;
+    }
+    return (float)_receiver_count[i] / (float)remaining;
   }
 };
 

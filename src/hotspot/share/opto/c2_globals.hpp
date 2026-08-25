@@ -476,7 +476,22 @@
           "Profiling based inlining for two receivers")                     \
                                                                             \
   product(bool, UseOnlyInlinedBimorphic, true,                              \
-          "Don't use BimorphicInlining if can't inline a second method")    \
+          "Don't use bi-/polymorphic inlining if the method of one of the " \
+          "minor receivers can't be inlined")                               \
+                                                                            \
+  product(bool, UsePolymorphicInlining, false,                              \
+          "Profiling based inlining for more than two receivers. Requires " \
+          "UseBimorphicInlining and a TypeProfileWidth of more than two, "  \
+          "which is set up automatically if it was not set explicitly. "    \
+          "Only applied to call sites that are executed frequently "        \
+          "relative to their caller, see InlineFrequencyRatio.")            \
+                                                                            \
+  product(intx, PolymorphicInliningLimit, 4,                                \
+          "Maximum number of receivers that UsePolymorphicInlining "        \
+          "speculatively inlines at a single call site. Unless "            \
+          "TypeProfileWidth is set explicitly, it is widened to this "      \
+          "value so that the profile can record all of them.")              \
+          range(3, 8) /* ciCallProfile::MorphismLimit */                    \
                                                                             \
   develop(bool, SubsumeLoads, true,                                         \
           "Attempt to compile while subsuming loads into machine "          \

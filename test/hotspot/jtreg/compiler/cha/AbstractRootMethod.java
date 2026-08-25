@@ -35,7 +35,7 @@
  *                   -XX:+PrintCompilation -XX:+PrintInlining -Xlog:dependencies=debug -verbose:class -XX:CompileCommand=quiet
  *                   -XX:CompileCommand=compileonly,*::m
  *                   -XX:CompileCommand=compileonly,*::test -XX:CompileCommand=dontinline,*::test
- *                   -Xbatch -Xmixed -XX:+WhiteBoxAPI
+ *                   -Xbatch -Xmixed -XX:+WhiteBoxAPI -XX:-UsePolymorphicInlining
  *                   -XX:-TieredCompilation
  *                   -XX:-StressMethodHandleLinkerInlining
  *                      compiler.cha.AbstractRootMethod
@@ -44,7 +44,7 @@
  *                   -XX:+PrintCompilation -XX:+PrintInlining -Xlog:dependencies=debug -verbose:class -XX:CompileCommand=quiet
  *                   -XX:CompileCommand=compileonly,*::m
  *                   -XX:CompileCommand=compileonly,*::test -XX:CompileCommand=dontinline,*::test
- *                   -Xbatch -Xmixed -XX:+WhiteBoxAPI
+ *                   -Xbatch -Xmixed -XX:+WhiteBoxAPI -XX:-UsePolymorphicInlining
  *                   -XX:+TieredCompilation -XX:TieredStopAtLevel=1
  *                   -XX:-StressMethodHandleLinkerInlining
  *                      compiler.cha.AbstractRootMethod

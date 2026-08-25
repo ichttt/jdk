@@ -83,7 +83,7 @@ class Deoptimization : AllStatic {
     Reason_class_check,           // saw unexpected object class (@bci)
     Reason_array_check,           // saw unexpected array class (aastore @bci)
     Reason_intrinsic,             // saw unexpected operand to intrinsic (@bci)
-    Reason_bimorphic,             // saw unexpected object class in bimorphic inlining (@bci)
+    Reason_bimorphic,             // saw unexpected object class in bi-/polymorphic inlining (@bci)
 
     Reason_profile_predicate,     // compiler generated predicate moved from frequent branch in a loop failed
     Reason_auto_vectorization_check, // compiler generated (speculative) auto vectorization checks failed

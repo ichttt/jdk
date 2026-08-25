@@ -38,7 +38,7 @@
  *                   -XX:CompileCommand=compileonly,*::m
  *                   -XX:CompileCommand=compileonly,*::test -XX:CompileCommand=dontinline,*::test
  *                   -XX:CompileCommand=compileonly,*::testHelper -XX:CompileCommand=inline,*::testHelper
- *                   -Xbatch -Xmixed -XX:+WhiteBoxAPI
+ *                   -Xbatch -Xmixed -XX:+WhiteBoxAPI -XX:-UsePolymorphicInlining
  *                   -XX:-TieredCompilation
  *                      compiler.cha.StrengthReduceInterfaceCall
  *
@@ -47,7 +47,7 @@
  *                   -XX:CompileCommand=compileonly,*::m
  *                   -XX:CompileCommand=compileonly,*::test -XX:CompileCommand=dontinline,*::test
  *                   -XX:CompileCommand=compileonly,*::testHelper -XX:CompileCommand=inline,*::testHelper
- *                   -Xbatch -Xmixed -XX:+WhiteBoxAPI
+ *                   -Xbatch -Xmixed -XX:+WhiteBoxAPI -XX:-UsePolymorphicInlining
  *                   -XX:+TieredCompilation -XX:TieredStopAtLevel=1
  *                      compiler.cha.StrengthReduceInterfaceCall
  */

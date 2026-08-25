@@ -497,6 +497,25 @@ void CompilerConfig::ergo_initialize() {
     // nothing to use the profiling, turn if off
     FLAG_SET_DEFAULT(TypeProfileLevel, 0);
   }
+  if (UsePolymorphicInlining && !UseBimorphicInlining) {
+    warning("Disabling UsePolymorphicInlining because UseBimorphicInlining is disabled");
+    FLAG_SET_ERGO(UsePolymorphicInlining, false);
+  }
+  if (UsePolymorphicInlining) {
+    // Guarded inlining can only speculate on receivers that were recorded by the
+    // profile, so widen it to cover as many receivers as we are willing to
+    // inline. Profiling beyond that only costs metadata: a call site with more
+    // receivers than PolymorphicInliningLimit is not guarded either way.
+    // Never narrow an explicitly requested width, the user may want to trade
+    // profiling overhead for inlining opportunities.
+    if (FLAG_IS_DEFAULT(TypeProfileWidth) && TypeProfileWidth < PolymorphicInliningLimit) {
+      FLAG_SET_ERGO(TypeProfileWidth, PolymorphicInliningLimit);
+    }
+    if (TypeProfileWidth < 3) {
+      warning("Disabling UsePolymorphicInlining because TypeProfileWidth is less than 3");
+      FLAG_SET_ERGO(UsePolymorphicInlining, false);
+    }
+  }
   if (!FLAG_IS_DEFAULT(OptoLoopAlignment) && FLAG_IS_DEFAULT(MaxLoopPad)) {
     FLAG_SET_DEFAULT(MaxLoopPad, OptoLoopAlignment-1);
   }

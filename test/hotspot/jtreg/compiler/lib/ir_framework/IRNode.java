@@ -490,6 +490,13 @@ public class IRNode {
         superWordNodes(AND_REDUCTION_V, "AndReductionV");
     }
 
+    // Uncommon trap that C2 emits when a receiver type check of bimorphic or
+    // polymorphic guarded inlining fails.
+    public static final String BIMORPHIC_TRAP = PREFIX + "BIMORPHIC_TRAP" + POSTFIX;
+    static {
+        trapNodes(BIMORPHIC_TRAP, "bimorphic");
+    }
+
     public static final String CALL = PREFIX + "CALL" + POSTFIX;
     static {
         beforeMatchingNameRegex(CALL, "Call.*Java");

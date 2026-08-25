@@ -477,6 +477,8 @@ ciCallProfile ciMethod::call_profile_at_bci(int bci) {
         result._receiver_count[0] = 0;  // that's a definite zero
       } else { // ReceiverTypeData is a subclass of CounterData
         ciReceiverTypeData* call = (ciReceiverTypeData*)data->as_ReceiverTypeData();
+        assert(call->row_limit() <= (uint)ciCallProfile::MorphismLimit,
+               "ciCallProfile cannot hold all %u profiled receivers", call->row_limit());
         // In addition, virtual call sites have receiver type information
         int receivers_count_total = 0;
         int morphism = 0;
@@ -491,8 +493,13 @@ ciCallProfile ciMethod::call_profile_at_bci(int bci) {
         // is recorded or an associated counter is incremented, but not both. With
         // tiered compilation, however, both can happen due to the interpreter and
         // C1 profiling invocations differently. Address that inconsistency here.
-        if (morphism == 1 && count > 0) {
-          epsilon = count;
+        // As long as the profile still has a free row it never had to drop a
+        // receiver, so the counted executions must have been of one of the
+        // recorded receivers and the count can be spread over them. Once all rows
+        // are taken the count reports receivers we know nothing about and has to
+        // be kept.
+        if (morphism > 0 && morphism < (int)call->row_limit() && count > 0) {
+          epsilon = count / morphism;
           count = 0;
         }
         for (uint i = 0; i < call->row_limit(); i++) {
@@ -506,20 +513,25 @@ ciCallProfile ciMethod::call_profile_at_bci(int bci) {
           // If we extend profiling to record methods,
           // we will set result._method also.
         }
-        // Determine call site's morphism.
-        // The call site count is 0 with known morphism (only 1 or 2 receivers)
-        // or < 0 in the case of a type check failure for checkcast, aastore, instanceof.
-        // The call site count is > 0 in the case of a polymorphic virtual call.
+        // Determine call site's morphism, i.e. the number of receivers this call
+        // site has been seen with. It is only known if the profile did not have
+        // to drop a receiver, which is the case as long as it has a free row.
+        // The call site count is 0 for such a profile (the fixup above took care
+        // of the counted but unrecorded executions) or < 0 in the case of a type
+        // check failure for checkcast, aastore, instanceof.
+        // Once all rows are taken, a count > 0 reports executions with receivers
+        // that could not be recorded: the call site is megamorphic and we do not
+        // know its receivers.
         if (morphism > 0 && morphism == result._limit) {
-           // The morphism <= MorphismLimit.
-           if ((morphism <  ciCallProfile::MorphismLimit) ||
-               (morphism == ciCallProfile::MorphismLimit && count == 0)) {
+           // The morphism <= row_limit().
+           if ((morphism <  (int)call->row_limit()) ||
+               (morphism == (int)call->row_limit() && count == 0)) {
 #ifdef ASSERT
              if (count > 0) {
                this->print_short_name(tty);
                tty->print_cr(" @ bci:%d", bci);
                this->print_codes();
-               assert(false, "this call site should not be polymorphic");
+               assert(false, "this call site should not be megamorphic");
              }
 #endif
              result._morphism = morphism;
